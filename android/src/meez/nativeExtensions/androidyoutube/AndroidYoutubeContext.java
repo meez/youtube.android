@@ -28,12 +28,14 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
 {
     // Definitions
 
-    /** States */
+    /** ANE State */
     private enum State
     {
-        UNSTARTED,
+        INITIALIZING,
+        STOPPED,
         PLAYING,
-        STOPPED
+        DISPOSING,
+        DISPOSED
     }
 
     /** Player States */
@@ -90,8 +92,9 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     public AndroidYoutubeContext()
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext()");
+
+        changeState(State.INITIALIZING);
         this.unsupportedReason="";
-        changeState(State.UNSTARTED);
     }
 
     /** Dispose */
@@ -100,33 +103,17 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext.dispose()");
 
-        changeState(State.STOPPED);
-
-        Extension.context = null;
+        changeState(State.DISPOSING);
 
         stopUpdateTimer();
-        this.videoTimer=null;
+
+        getRootContainer().removeView(videoContainer);
+        this.videoContainer.removeAllViews();
+        this.dialog.dismiss();
+        this.playerFragment.setRetainInstance(false);
 
         try
         {
-            if (this.dialog!=null)
-            {
-                this.dialog.dismiss();
-            }
-        }
-        catch(Throwable t)
-        {
-            Log.w(Extension.TAG, "Could not dismiss video dialog", t);
-        }
-        finally
-        {
-            this.dialog=null;
-        }
-
-        try
-        {
-            this.playerFragment.setRetainInstance(false);
-
             // Removing fragment will call onDestroyView() on the fragment, which will release the YouTubePlayer
             // see https://developers.google.com/youtube/android/player/reference/com/google/android/youtube/player/YouTubePlayerFragment#Overview
             getActivity().getFragmentManager()
@@ -140,8 +127,20 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         }
         finally
         {
+            this.videoContainer = null;
+            this.layoutParams = null;
+            this.dialog = null;
             this.playerFragment=null;
+            Extension.context=null;
+            changeState(State.DISPOSED);
         }
+    }
+
+    /** Fragment View Listener Interface */
+    public interface FragmentViewListener
+    {
+        void onFragmentViewCreated();
+        void onSaveInstance(boolean saveState);
     }
 
     /** Registers AS function name to Java Function Class */
@@ -168,21 +167,55 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
      */
     public void initVideo(String devKey)
     {
-        Log.d(Extension.TAG, "AndroidYouTubeContext.initVid()");
+        Log.d(Extension.TAG, "AndroidYouTubeContext.initVideo()");
 
-        //Hack - do not want to see video container until it has been added to dialog
-        getVideoContainer().setVisibility(View.INVISIBLE);
+        assertState(State.INITIALIZING);
 
-        //Hack - videoContainer is only added to view long enough to attach fragment.
+        // Create views
+        this.videoContainer = createVideoContainer();
+        this.videoContainer.setId(AndroidYoutubeContext.generateViewId());
+        this.layoutParams = createLayoutParams();
+        this.dialog = createDialog();
+        this.playerFragment = createPlayerFragment(new FragmentViewListener(){
+            @Override public void  onFragmentViewCreated() {
+                if (checkState(State.DISPOSING) || checkState(State.DISPOSED))
+                    return;
+
+                // Remove from root and add to dialog
+                getRootContainer().removeView(videoContainer);
+
+                // hide video offscreen until explicitly positioned by Actionscript call
+                setVideoFrame(-5000, -5000, 600, 400);
+
+                dialog.setContentView(videoContainer);
+                dialog.show();
+
+                videoContainer.setVisibility(View.VISIBLE);
+
+                // Leave init state when view is ready.
+                changeState(State.STOPPED);
+            }
+            @Override public void onSaveInstance(boolean saveState){
+                if (checkState(State.DISPOSING) || checkState(State.DISPOSED))
+                    return;
+                setVideoSaveEnabled(saveState);
+            }
+        });
+
+        //Hack - videoContainer is only added to root view long enough to attach fragment (fragment must be attached to view in Android 'display list').
         // In Fragment's onViewCreated() videoContainer is removed from root container and set as view of Dialog
-        getRootContainer().addView(getVideoContainer());
-        getVideoContainer().setId(AndroidYoutubeContext.generateViewId());
-        getActivity().getFragmentManager().beginTransaction()
-                .add(getVideoContainer().getId(), getPlayerFragment())
+        this.videoContainer.setVisibility(View.INVISIBLE);
+        getRootContainer().addView(this.videoContainer);
+
+        // Add YouTube fragment to video container
+        getActivity()
+                .getFragmentManager()
+                .beginTransaction()
+                .add(this.videoContainer.getId(), this.playerFragment)
                 .commit();
 
-        // Initialize the video player
-        getPlayerFragment().initialize(devKey, this);
+        // Initialize the video player fragment
+        this.playerFragment.initialize(devKey, this);
     }
 
     // Views
@@ -193,57 +226,45 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         return (ViewGroup)((ViewGroup)getActivity().findViewById(android.R.id.content)).getChildAt(0);
     }
 
-    /** Get the video container layout */
-    public FrameLayout getVideoContainer()
+    /** Create Video Container Layout */
+    public FrameLayout createVideoContainer()
     {
-        if (this.videoContainer==null)
-        {
-            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-            this.videoContainer = new FrameLayout(getActivity());
-            this.videoContainer.setLayoutParams(params);
-        }
-        return this.videoContainer;
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        FrameLayout layout = new FrameLayout(getActivity());
+        layout.setLayoutParams(params);
+        return  layout;
     }
 
-    /** Get the YouTube Player Fragment */
-    public YouTubePlayerFragment getPlayerFragment()
+    /** Create YouTube Player Fragment */
+    public YouTubePlayerFragment createPlayerFragment(FragmentViewListener fragmentViewListener)
     {
-        if (this.playerFragment==null)
-        {
-            this.playerFragment = new AndroidYoutubeContext.CustomPlayerFragment();
-            this.playerFragment.setRetainInstance(true);
-        }
-        return this.playerFragment;
+        AndroidYoutubeContext.CustomPlayerFragment fragment = new AndroidYoutubeContext.CustomPlayerFragment(fragmentViewListener);
+        fragment.setRetainInstance(true);
+        return  fragment;
     }
 
-    /** Get the layout params */
-    public WindowManager.LayoutParams getLayoutParams()
+    /** Create Video layout params */
+    public WindowManager.LayoutParams createLayoutParams()
     {
-        if (this.layoutParams==null)
-        {
-            this.layoutParams=new WindowManager.LayoutParams();
-            this.layoutParams.gravity = Gravity.TOP | Gravity.LEFT;
-            this.layoutParams.dimAmount = 0.0f;
-            this.layoutParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS |
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
-                    WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
-        }
-        return this.layoutParams;
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams();
+        params.gravity = Gravity.TOP | Gravity.LEFT;
+        params.dimAmount = 0.0f;
+        params.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS |
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
+        return params;
     }
 
-    /** Get the Dialog box */
-    public Dialog getDialog()
+    /** Create Video Dialog  */
+    public Dialog createDialog()
     {
-        if (this.dialog==null)
-        {
-            this.dialog = new Dialog(getActivity());
-            this.dialog.setCancelable(false);
-            this.dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-            this.dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-            this.dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        }
-        return this.dialog;
+        Dialog dialog = new Dialog(getActivity());
+        dialog.setCancelable(false);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        return dialog;
     }
 
     // Public methods
@@ -261,37 +282,34 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         }
         else
         {
+            // store to play when player is ready
             this.videoToPlay = videoId;
             this.startTime = startTimeMS;
         }
     }
 
-    /** Display the Dialog with the Video player */
-    public void showVideoDialog()
-    {
-        // hide video until explicitly positioned by Actionscript call
-        setVideoFrame(-5000, -5000, 600, 400);
-
-        getDialog().setContentView(getVideoContainer());
-
-        getDialog().show();
-    }
-
     /** Play Video */
-    public  void playVideo()
+    public void playVideo()
     {
+        if (!playerIsReady())
+            return;
         this.player.play();
     }
 
     /** Pause Video */
     public void pauseVideo()
     {
+        if (!playerIsReady())
+            return;
         this.player.pause();
     }
 
     /** Seek in Video */
     public void doSeek(double timeInSeconds)
     {
+        if (!playerIsReady())
+            return;
+
         int timeInMilliseconds = (int)(1000 * timeInSeconds);
         int dur = this.player.getDurationMillis();
 
@@ -307,14 +325,17 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     /** Set video frame */
     public void setVideoFrame(int x, int y, int width, int height)
     {
+        if(checkState(State.DISPOSING) || checkState(State.DISPOSED))
+            return;
+
         Log.d(Extension.TAG, String.format("AndroidYouTubeContext.setVideoFrame(%d, %d, %d, %d)", x, y, width, height));
 
-        getLayoutParams().width = width;
-        getLayoutParams().height = height;
-        getLayoutParams().x = x;
-        getLayoutParams().y = y;
+        this.layoutParams.width = width;
+        this.layoutParams.height = height;
+        this.layoutParams.x = x;
+        this.layoutParams.y = y;
 
-        getDialog().getWindow().setAttributes(getLayoutParams());
+        this.dialog.getWindow().setAttributes(this.layoutParams);
     }
 
     /** Get the reason YouTube video is unsupported */
@@ -368,7 +389,6 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         {
             Log.w(Extension.TAG, "Unexpected message type received from actionscript: ("+json+")");
         }
-
     }
 
     // YouTubePlayer.OnInitializedListener Implementation
@@ -376,7 +396,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     @Override
     public void onInitializationFailure(YouTubePlayer.Provider provider, YouTubeInitializationResult errorReason)
     {
-        Log.w(Extension.TAG, "AndroidYouTubeContext.onInitializaionFailure(). Could not Initialize player.");
+        Log.w(Extension.TAG, "AndroidYouTubeContext.onInitializaionFailure(). Could not Initialize player. Reason ("+errorReason.toString()+")");
 
         dispatchEventWithReason("videoError", "Could not initialize video player");
     }
@@ -385,6 +405,9 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     public void onInitializationSuccess(YouTubePlayer.Provider provider, YouTubePlayer player, boolean wasRestored)
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext.onInitSuccess (player="+player+", wasRestored="+wasRestored+")");
+
+        if (checkState(State.DISPOSING) || checkState(State.DISPOSED))
+            return;
 
         this.player=player;
         this.player.setPlayerStateChangeListener(this);
@@ -461,6 +484,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
             msg=PLAYER_ERROR_NETWORK;
             code=500; // Meez API Error Code
         }
+        // Unknown reason
         else
         {
             msg=errorReason.toString();
@@ -472,7 +496,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     @Override
     public void onLoaded(String arg0)
     {
-        Log.d(Extension.TAG, "AndroidYouTubeContext.onLoaded");
+        Log.d(Extension.TAG, "AndroidYouTubeContext.onLoaded("+arg0+")");
 
         sendState(PLAYER_STATE_UNSTARTED);
     }
@@ -555,9 +579,9 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     }
 
     /** Set Save Enabled on Video view and its children */
-    public void setVideoSaveEnabled(final boolean value)
+    protected void setVideoSaveEnabled(final boolean value)
     {
-        recursiveCallOnView(getVideoContainer(), new CallableOnView(){
+        recursiveCallOnView(this.videoContainer, new CallableOnView(){
             @Override public void call(View view) {
                 view.setSaveEnabled(value);
             }
@@ -578,15 +602,6 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
             }
         }
         callableOnView.call(view);
-    }
-
-    /** Initialize the Dialog box to show video */
-    private void initVideoDialog()
-    {
-        // called in onCreateView method of custom player fragment
-        getRootContainer().removeView(getVideoContainer());
-        showVideoDialog();
-        getVideoContainer().setVisibility(View.VISIBLE);
     }
 
     /** Start the update timer */
@@ -626,6 +641,15 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     private boolean checkState(State state)
     {
         return this.state.equals(state);
+    }
+
+    /** Assert a State */
+    private void assertState(State s)
+    {
+        if (!checkState(s))
+        {
+            throw new IllegalStateException("Expected state("+s+"). Actual state ("+this.state+")");
+        }
     }
 
     // Event dispatching
@@ -718,7 +742,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     public void dispatchEventWithReason(String type, String reason)
     {
         // Dispose has been called
-        if (Extension.context==null)
+        if (checkState(State.DISPOSING) || checkState(State.DISPOSED))
         {
             Log.w(Extension.TAG, "Sending event to AIR App after dispose() called ("+type+", "+reason+")");
             return;
@@ -740,7 +764,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
             this.unsupportedReason = "Android API Level less than 11 (" + Integer.toString(apiLevel) + ")";
         }
 
-        return  apiLevel;
+        return apiLevel;
     }
 
     /** Determine if YouTube is installed or not */
@@ -766,7 +790,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     /** Generate a View ID with no conflicts */
     public static int generateViewId()
     {
-        // Taken from View.generateViewId() which is API 17+
+        //HACK this is taken from View.generateViewId() but that is API 17+
         for (;;)
         {
             final int result = sNextGeneratedId.get();
@@ -836,19 +860,33 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     /** YouTube Player Fragment */
     public static class CustomPlayerFragment extends YouTubePlayerFragment
     {
-        @Override
-        public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState)
+        protected AndroidYoutubeContext.FragmentViewListener fragmentViewListener;
+
+        /** Create a new CustomPlayerFragment */
+        public CustomPlayerFragment(AndroidYoutubeContext.FragmentViewListener fragmentViewListener)
         {
-            Extension.context.initVideoDialog();
+            this.fragmentViewListener=fragmentViewListener;
+        }
+
+        /** On Create View */
+        @Override public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState)
+        {
+            Log.d(Extension.TAG, "CustomPlayerFragment.onCreateView()");
+
+            this.fragmentViewListener.onFragmentViewCreated();
+
             return super.onCreateView(inflater, container, savedInstanceState);
         }
 
+        /** On Save Instance State */
         @Override public void onSaveInstanceState(Bundle bundle)
         {
+            Log.d(Extension.TAG, "CustomPlayerFragment.onSaveInstanceState()");
+
             //HACK: This is in place to fix missing parcelable/no class def found errors.
             //see: https://stackoverflow.com/questions/44558166/fatal-exception-java-lang-noclassdeffounderror-rt
             //and: https://stackoverflow.com/questions/44379747/youtube-android-player-api-throws-badparcelableexception-classnotfoundexception
-            Extension.context.setVideoSaveEnabled(false);
+            this.fragmentViewListener.onSaveInstance(false);
 
             super.onSaveInstanceState(bundle);
         }
