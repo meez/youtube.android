@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="ANE" default="all" xmlns:artifact="antlib:org.apache.maven.artifact.ant">
+
+    <!-- Support Files -->
+    <property file="project.properties"/>
+    <property name="support.home" location=".."/>
+    <import file="${support.home}/ant/air.xml"/>
+    <property file="${support.home}/build.properties"/>
+
+    <!-- Paths -->
+    <property name="src.root" location="src"/>
+    <property name="lib.root" location="lib"/>
+
+    <property name="build.root" location="build"/>
+    <property name="build.package" location="build/package"/>
+    <property name="build.ane" location="build/ane"/>
+
+    <!-- All -->
+    <target name="all" depends="clean, package" description="Full build of extension"/>
+    <target name="native-all" depends="clean, native-android, package" description="Full build of extension (incl. compilation of native code)"/>
+
+    <!-- Init -->
+    <target name="init">
+        <mkdir dir="${build.root}"/>
+        <mkdir dir="${build.package}"/>
+    </target>
+    
+    <!-- Clean -->
+    <target name="clean">
+        <delete dir="${build.root}"/>
+    </target>
+
+    <!-- Third Party Libraries -->
+    <target name="dependencies">
+
+        <path id="src.path">
+            <pathelement location='${src.root}/as3'/>
+        </path>
+
+    </target>
+
+    <!-- Compile -->
+    <target name="compile" depends="init,dependencies" description="Build SWC library">
+        
+        <compc
+                pathRef="src.path"
+                configxml="${src.root}/resources/lib.xml"
+                sdkConfig="air"
+                sdkPath="${air.sdk.home}"
+                debug="true"
+                output="${build.package}/androidyoutube.swc">
+        </compc>
+
+        <!-- Extract the SWF needed to build the ANE -->
+        <unzip src="${build.package}/androidyoutube.swc" dest="${build.package}">
+            <patternset>
+                <include name="library.swf"/>
+            </patternset>
+        </unzip>
+
+    </target>
+
+    <!-- Package -->
+    <target name="package" depends="compile" description="Create the extension package">
+
+        <mkdir dir="${build.ane}"/>
+        <copy todir="${build.ane}/default">
+            <fileset dir="${build.package}">
+                <include name="library.swf"/>
+            </fileset>
+        </copy>
+        <copy todir="${build.ane}/android">
+            <fileset dir="${lib.root}/android"/>
+            <fileset dir="${build.package}">
+                <include name="library.swf"/>
+            </fileset>
+        </copy>
+
+        <adt
+                sign.args=""
+                target="ane"
+                output="${build.package}/${project.artifactId}-${project.version}.ane"
+                descriptor="${src.root}/resources/extension.xml">
+            <arg line="-swc ${build.package}/androidyoutube.swc"/>
+            <arg line="-platform Android-ARM -C ${build.ane}/android/ ."/>
+            <arg line="-platform Android-x86 -C ${build.ane}/android/ ."/>
+            <arg line="-platform default -C ${build.ane}/default/ ."/>
+        </adt>
+
+    </target>
+    
+    <!-- Android -->
+    <target name="native-android" description="Build Android">
+  
+      <ant dir="android" inheritAll="true" inheritRefs="true" target="all">
+          <property name="build.root" value="${build.root}/android"/>
+      </ant>
+    
+        <copy todir="${lib.root}/android">
+            <fileset dir="build/android/jar"/>
+        </copy>
+    
+    </target>
+
+    <!-- Repository -->
+    <target name="install">
+
+        <artifact:pom
+                id="ane.pom"
+                groupId="${project.groupId}"
+                artifactId="${project.artifactId}"
+                version="${project.version}"
+                packaging="ane">
+        </artifact:pom>
+
+        <!-- Workaround for https://jira.codehaus.org/browse/MANTTASKS-170 -->
+        <artifact:writepom pomRefId="ane.pom" file="${build.package}/${project.artifactId}-pom.xml"/>
+        <artifact:pom id="build.pom" file="${build.package}/${project.artifactId}-pom.xml"/>
+
+        <artifact:install file="${build.package}/${project.artifactId}-${project.version}.ane" pomRefId="build.pom"/>
+
+    </target>
+
+</project>

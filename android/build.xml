@@ -1,0 +1,56 @@
+<project name="Native Android AndroidYouTube.jar build" basedir="." default="all">
+
+    <!-- Properties -->
+    <property name="src.java" location="src"/>
+    <property file="../../build.properties"/>
+    
+    <!-- Class Path -->
+    <path id="class.path">
+        <pathelement location="${android.sdk.platform}/android.jar"/>
+        <pathelement location="${air.sdk.home}/lib/android/FlashRuntimeExtensions.jar"/>
+        <pathelement location="${android.sdk.home}/extras/android/support/v4/android-support-v4.jar"/>
+        <!-- Include additional required jar files in libs -->
+        <fileset dir="libs">
+            <include name="**/*.jar"/>
+        </fileset>
+    </path>
+    
+    <!-- Init -->
+    <target name="init">
+        <echo message="Build Root: ${build.root}"/>
+        <tstamp>
+            <format property="build.time" pattern="yyyy/MM/dd hh:mm"/>
+        </tstamp>
+        <mkdir dir="${build.root}"/>
+    </target>
+    
+    <!-- Clean -->
+    <target name="clean">
+        <delete dir="${build.root}"/>
+    </target>
+    
+    <!-- All (Default -->
+    <target name="all" depends="clean, package"/>
+    
+    <!-- Compile -->
+    <target name="compile" depends="init">
+        <mkdir dir="${build.root}/classes"/>
+        <javac source="1.6" target="1.6" srcdir="${src.java}" destdir="${build.root}/classes" includeantruntime="false">
+            <classpath refid="class.path"/>
+        </javac>
+    </target>
+    
+    <!-- Package -->
+    <target name="package" depends="compile">
+        <jar destfile="${build.root}/jar/AndroidYouTube.jar">
+            <manifest>
+                <attribute name="Implementation-Title" value="AndroidWebView ANE"/>
+                <attribute name="Build-Time" value="${build.time}"/>
+            </manifest>
+            <fileset dir="${build.root}/classes"/>
+            <!-- Unroll YouTubeAndroidPlayerApi into our library -->
+            <zipfileset src="libs/YouTubeAndroidPlayerApi-1.2.2.jar" excludes="META-INF/**,res/**"/>
+        </jar>
+    </target>
+
+</project>
