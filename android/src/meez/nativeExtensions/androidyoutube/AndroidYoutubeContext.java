@@ -32,8 +32,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     private enum State
     {
         INITIALIZING,
-        STOPPED,
-        PLAYING,
+        READY,
         DISPOSING,
         DISPOSED
     }
@@ -127,20 +126,8 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         }
         finally
         {
-            this.videoContainer = null;
-            this.layoutParams = null;
-            this.dialog = null;
-            this.playerFragment=null;
-            Extension.context=null;
             changeState(State.DISPOSED);
         }
-    }
-
-    /** Fragment View Listener Interface */
-    public interface FragmentViewListener
-    {
-        void onFragmentViewCreated();
-        void onSaveInstance(boolean saveState);
     }
 
     /** Registers AS function name to Java Function Class */
@@ -161,14 +148,22 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         return functionMap;
     }
 
+    /** Fragment View Listener Interface */
+    public interface FragmentViewListener
+    {
+        void onFragmentViewCreated();
+        void onSaveInstance(boolean saveState);
+    }
+
     /**
      * Initialize the video player
      * @param devKey Developer key from google/youtube
      */
-    public void initVideo(String devKey)
+    public void initVideo(final String devKey)
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext.initVideo()");
 
+        // Should only be called 1x during init state
         assertState(State.INITIALIZING);
 
         // Create views
@@ -177,8 +172,8 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         this.layoutParams = createLayoutParams();
         this.dialog = createDialog();
         this.playerFragment = createPlayerFragment(new FragmentViewListener(){
-            @Override public void  onFragmentViewCreated() {
-                if (checkState(State.DISPOSING) || checkState(State.DISPOSED))
+            @Override public void onFragmentViewCreated() {
+                if (!checkState(State.INITIALIZING))
                     return;
 
                 // Remove from root and add to dialog
@@ -192,12 +187,12 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
 
                 videoContainer.setVisibility(View.VISIBLE);
 
-                // Leave init state when view is ready.
-                changeState(State.STOPPED);
+                changeState(State.READY);
+
+                // Initialize the video player fragment
+                playerFragment.initialize(devKey, AndroidYoutubeContext.this);
             }
             @Override public void onSaveInstance(boolean saveState){
-                if (checkState(State.DISPOSING) || checkState(State.DISPOSED))
-                    return;
                 setVideoSaveEnabled(saveState);
             }
         });
@@ -213,9 +208,6 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
                 .beginTransaction()
                 .add(this.videoContainer.getId(), this.playerFragment)
                 .commit();
-
-        // Initialize the video player fragment
-        this.playerFragment.initialize(devKey, this);
     }
 
     // Views
@@ -266,8 +258,6 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         return dialog;
     }
-
-    // Public methods
 
     /** Play video by ID (YouTube video id) */
     public void playVideoById(String videoId, double startTime)
@@ -325,9 +315,6 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     /** Set video frame */
     public void setVideoFrame(int x, int y, int width, int height)
     {
-        if(checkState(State.DISPOSING) || checkState(State.DISPOSED))
-            return;
-
         Log.d(Extension.TAG, String.format("AndroidYouTubeContext.setVideoFrame(%d, %d, %d, %d)", x, y, width, height));
 
         this.layoutParams.width = width;
@@ -406,7 +393,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext.onInitSuccess (player="+player+", wasRestored="+wasRestored+")");
 
-        if (checkState(State.DISPOSING) || checkState(State.DISPOSED))
+        if (!checkState(State.READY))
             return;
 
         this.player=player;
@@ -540,7 +527,6 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext.onPaused");
 
-        changeState(State.STOPPED);
         stopUpdateTimer();
         sendState(PLAYER_STATE_PAUSED);
     }
@@ -550,7 +536,6 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext.onPlaying");
 
-        changeState(State.PLAYING);
         startUpdateTimer();
         sendState(PLAYER_STATE_PLAYING);
     }
@@ -566,7 +551,6 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext.onStopped");
 
-        changeState(State.STOPPED);
         stopUpdateTimer();
     }
 
@@ -638,9 +622,14 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     }
 
     /** Check the current state */
-    private boolean checkState(State state)
+    private boolean checkState(State expState)
     {
-        return this.state.equals(state);
+        boolean correct=this.state.equals(expState);
+        if (!correct)
+        {
+            Log.w(Extension.TAG, "Check state failed. Expected ("+expState+"). Actual ("+this.state+")");
+        }
+        return correct;
     }
 
     /** Assert a State */
@@ -682,7 +671,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     private void sendTimeData() throws Exception
     {
         // if not playing, send no data
-        if (!checkState(State.PLAYING))
+        if (!this.player.isPlaying())
             return;
 
         //sendMessage({type:"time", time:{current:c, total:t}});
@@ -741,10 +730,9 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
      */
     public void dispatchEventWithReason(String type, String reason)
     {
-        // Dispose has been called
-        if (checkState(State.DISPOSING) || checkState(State.DISPOSED))
+        if (!checkState(State.READY))
         {
-            Log.w(Extension.TAG, "Sending event to AIR App after dispose() called ("+type+", "+reason+")");
+            Log.w(Extension.TAG, "Sending event to AIR App when not ready ("+type+", "+reason+")");
             return;
         }
 
