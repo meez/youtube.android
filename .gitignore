@@ -1,9 +1,21 @@
 # Build and Release Folders
+build/
 bin/
 bin-debug/
 bin-release/
 [Oo]bj/ # FlashDevelop obj
 [Bb]in/ # FlashDevelop bin
+
+# IDE
+# IntelliJ
+.idea
+*.iml
+*.ipr
+*.iws
+# FlashDevelop
+bat/
+obj/
+*.as3proj
 
 # Other files and folders
 .settings/
