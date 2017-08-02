@@ -79,6 +79,9 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     /** Current State */
     private State state;
 
+    /** Developer Key */
+    private String devKey;
+
     // temp vars to hold onto until player is created
 
     /** URL/VideoId to load in Player */
@@ -148,54 +151,25 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
         return functionMap;
     }
 
-    /** Fragment View Listener Interface */
-    public interface FragmentViewListener
-    {
-        void onFragmentViewCreated();
-        void onSaveInstance(boolean saveState);
-    }
-
     /**
      * Initialize the video player
      * @param devKey Developer key from google/youtube
      */
-    public void initVideo(final String devKey)
+    public void initVideo(String devKey)
     {
         Log.d(Extension.TAG, "AndroidYouTubeContext.initVideo()");
 
         // Should only be called 1x during init state
         assertState(State.INITIALIZING);
 
+        this.devKey = devKey;
+
         // Create views
         this.videoContainer = createVideoContainer();
         this.videoContainer.setId(AndroidYoutubeContext.generateViewId());
         this.layoutParams = createLayoutParams();
         this.dialog = createDialog();
-        this.playerFragment = createPlayerFragment(new FragmentViewListener(){
-            @Override public void onFragmentViewCreated() {
-                if (!checkState(State.INITIALIZING))
-                    return;
-
-                // Remove from root and add to dialog
-                getRootContainer().removeView(videoContainer);
-
-                // hide video offscreen until explicitly positioned by Actionscript call
-                setVideoFrame(-5000, -5000, 600, 400);
-
-                dialog.setContentView(videoContainer);
-                dialog.show();
-
-                videoContainer.setVisibility(View.VISIBLE);
-
-                changeState(State.READY);
-
-                // Initialize the video player fragment
-                playerFragment.initialize(devKey, AndroidYoutubeContext.this);
-            }
-            @Override public void onSaveInstance(boolean saveState){
-                setVideoSaveEnabled(saveState);
-            }
-        });
+        this.playerFragment = createPlayerFragment();
 
         //Hack - videoContainer is only added to root view long enough to attach fragment (fragment must be attached to view in Android 'display list').
         // In Fragment's onViewCreated() videoContainer is removed from root container and set as view of Dialog
@@ -208,6 +182,39 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
                 .beginTransaction()
                 .add(this.videoContainer.getId(), this.playerFragment)
                 .commit();
+    }
+
+    /** On Fragment View Created */
+    public void onFragmentViewCreated()
+    {
+        // Called from Youtube Fragment
+
+        if (!checkState(State.INITIALIZING))
+            return;
+
+        // Remove from root and add to dialog
+        getRootContainer().removeView(videoContainer);
+
+        // hide video offscreen until explicitly positioned by Actionscript call
+        setVideoFrame(-5000, -5000, 600, 400);
+
+        this.dialog.setContentView(videoContainer);
+        this.dialog.show();
+
+        this.videoContainer.setVisibility(View.VISIBLE);
+
+        changeState(State.READY);
+
+        // Initialize the video player fragment
+        this.playerFragment.initialize(this.devKey, this);
+    }
+
+    /** On Fragment Save Instance */
+    public void onFragmentSaveInstance(boolean saveState)
+    {
+        // Called from Youtube Fragment
+
+        setVideoSaveEnabled(saveState);
     }
 
     // Views
@@ -228,11 +235,11 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     }
 
     /** Create YouTube Player Fragment */
-    public YouTubePlayerFragment createPlayerFragment(FragmentViewListener fragmentViewListener)
+    public YouTubePlayerFragment createPlayerFragment()
     {
-        AndroidYoutubeContext.CustomPlayerFragment fragment = new AndroidYoutubeContext.CustomPlayerFragment(fragmentViewListener);
+        AndroidYoutubeContext.CustomPlayerFragment fragment = new AndroidYoutubeContext.CustomPlayerFragment();
         fragment.setRetainInstance(true);
-        return  fragment;
+        return fragment;
     }
 
     /** Create Video layout params */
@@ -848,20 +855,12 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
     /** YouTube Player Fragment */
     public static class CustomPlayerFragment extends YouTubePlayerFragment
     {
-        protected AndroidYoutubeContext.FragmentViewListener fragmentViewListener;
-
-        /** Create a new CustomPlayerFragment */
-        public CustomPlayerFragment(AndroidYoutubeContext.FragmentViewListener fragmentViewListener)
-        {
-            this.fragmentViewListener=fragmentViewListener;
-        }
-
         /** On Create View */
         @Override public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState)
         {
             Log.d(Extension.TAG, "CustomPlayerFragment.onCreateView()");
 
-            this.fragmentViewListener.onFragmentViewCreated();
+            Extension.context.onFragmentViewCreated();
 
             return super.onCreateView(inflater, container, savedInstanceState);
         }
@@ -874,7 +873,7 @@ public class AndroidYoutubeContext extends FREContext implements YouTubePlayer.O
             //HACK: This is in place to fix missing parcelable/no class def found errors.
             //see: https://stackoverflow.com/questions/44558166/fatal-exception-java-lang-noclassdeffounderror-rt
             //and: https://stackoverflow.com/questions/44379747/youtube-android-player-api-throws-badparcelableexception-classnotfoundexception
-            this.fragmentViewListener.onSaveInstance(false);
+            Extension.context.onFragmentSaveInstance(false);
 
             super.onSaveInstanceState(bundle);
         }
